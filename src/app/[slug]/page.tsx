@@ -1,20 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  getActiveRangeJob,
   getPersonBySlug,
   getRecommendations,
   getStatusCounts,
   type RecStatus,
 } from "@/lib/db";
 import { savePerson, scanNow, setRecommendationStatus } from "@/lib/actions";
-import { MAX_RANGE_YEARS } from "@/lib/range";
 import { SubmitButton } from "@/components/SubmitButton";
 import { LocalTime } from "@/components/LocalTime";
 import { SetupNotice } from "@/components/SetupNotice";
-import { RangeSearch } from "@/components/RangeSearch";
 
-// "Scan now" and time-window search steps run as server actions on this page and can take a few minutes.
+// "Scan now" runs as a server action on this page and can take a few minutes.
 export const maxDuration = 300;
 
 const TABS: { status: RecStatus; label: string; param: string }[] = [
@@ -39,15 +36,11 @@ export default async function PersonPage({
   const { slug } = await params;
   const { list } = await searchParams;
   const tab = TABS.find((t) => t.param === list) ?? TABS[0];
-  let person, recs, counts, job;
+  let person, recs, counts;
   try {
     person = await getPersonBySlug(decodeURIComponent(slug));
     if (person) {
-      [recs, counts, job] = await Promise.all([
-        getRecommendations(person.id, tab.status),
-        getStatusCounts(person.id),
-        getActiveRangeJob(person.id),
-      ]);
+      [recs, counts] = await Promise.all([getRecommendations(person.id, tab.status), getStatusCounts(person.id)]);
     }
   } catch (err) {
     return <SetupNotice error={err} />;
@@ -196,19 +189,6 @@ export default async function PersonPage({
         {recs.length >= 300 && <p className="muted small">Showing the 300 most recent.</p>}
       </section>
 
-      <section className="card">
-        <h2>Search a time window</h2>
-        <p className="muted small">
-          Look through older publications, up to {MAX_RANGE_YEARS} years at a time. Results go to your Recommended list.
-          This runs on top of your weekly/monthly schedule, which keeps going as set above.
-        </p>
-        <RangeSearch
-          personId={person.id}
-          hasInterests={!!person.interests.trim()}
-          initialJob={job ?? null}
-          maxYears={MAX_RANGE_YEARS}
-        />
-      </section>
     </>
   );
 }

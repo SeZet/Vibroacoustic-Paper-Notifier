@@ -13,20 +13,6 @@ export function modelName(): string {
   return process.env.CLAUDE_MODEL || "claude-opus-5-5";
 }
 
-// USD per million tokens (input, output). Unknown models are priced like Opus.
-const PRICES: Record<string, [number, number]> = {
-  "claude-opus-5-5": [4, 20],
-  "claude-sonnet-5-5": [2, 10],
-  "claude-haiku-5-5": [0.1, 0.5],
-};
-
-/** Rough Claude cost for judging this many papers for one person. */
-export function estimateCostUsd(paperCount: number): number {
-  const [inPrice, outPrice] = PRICES[modelName()] ?? PRICES["claude-opus-5-5"];
-  // About 320 input tokens per paper (title, venue, shortened abstract, share of the
-  // instructions) and about 40 output tokens per paper (scores, reasons, thinking).
-  return (paperCount * (320 * inPrice + 40 * outPrice)) / 1_000_000;
-}
 const CONCURRENCY = 3;
 const ABSTRACT_CHARS = 900;
 

@@ -114,13 +114,6 @@ button:disabled { opacity: 0.6; cursor: progress; }
 .tab-count { font-size: 0.75rem; color: var(--muted); font-weight: normal; }
 .tabs + .papers li:first-child { border-top: 0; }
 
-.range input[type="date"] { width: auto; }
-.bar { height: 8px; background: var(--accent-soft); border-radius: 999px; overflow: hidden; }
-.bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
-.estimate { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; }
-.estimate p { margin: 0; }
-.warn { color: var(--danger); }
-.ok { color: var(--good); }
 
 .venues { width: 100%; border-collapse: collapse; }
 .venues th, .venues td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
