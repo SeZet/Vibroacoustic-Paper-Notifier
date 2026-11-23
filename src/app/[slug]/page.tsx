@@ -1,23 +1,69 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPersonBySlug, getRecommendations } from "@/lib/db";
-import { dismissRecommendation, savePerson, scanNow } from "@/lib/actions";
+import {
+  getActiveRangeJob,
+  getPersonBySlug,
+  getRecommendations,
+  getStatusCounts,
+  type RecStatus,
+} from "@/lib/db";
+import { savePerson, scanNow, setRecommendationStatus } from "@/lib/actions";
+import { MAX_RANGE_YEARS } from "@/lib/range";
 import { SubmitButton } from "@/components/SubmitButton";
 import { LocalTime } from "@/components/LocalTime";
 import { SetupNotice } from "@/components/SetupNotice";
+import { RangeSearch } from "@/components/RangeSearch";
 
-// "Scan now" runs inside this page's server action and can take a few minutes.
+// "Scan now" and time-window search steps run as server actions on this page and can take a few minutes.
 export const maxDuration = 300;
 
-export default async function PersonPage({ params }: { params: Promise<{ slug: string }> }) {
+const TABS: { status: RecStatus; label: string; param: string }[] = [
+  { status: "new", label: "Recommended", param: "recommended" },
+  { status: "saved", label: "Saved", param: "saved" },
+  { status: "deleted", label: "Deleted", param: "deleted" },
+];
+
+const EMPTY: Record<RecStatus, string> = {
+  new: "No recommended papers right now.",
+  saved: "Nothing saved yet. Use Save on a recommended paper to keep it here.",
+  deleted: "Nothing deleted.",
+};
+
+export default async function PersonPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ list?: string }>;
+}) {
   const { slug } = await params;
-  let person, recs;
+  const { list } = await searchParams;
+  const tab = TABS.find((t) => t.param === list) ?? TABS[0];
+  let person, recs, counts, job;
   try {
     person = await getPersonBySlug(decodeURIComponent(slug));
-    recs = person ? await getRecommendations(person.id) : [];
+    if (person) {
+      [recs, counts, job] = await Promise.all([
+        getRecommendations(person.id, tab.status),
+        getStatusCounts(person.id),
+        getActiveRangeJob(person.id),
+      ]);
+    }
   } catch (err) {
     return <SetupNotice error={err} />;
   }
-  if (!person) notFound();
+  if (!person || !recs || !counts) notFound();
+
+  const move = (id: number, status: RecStatus, label: string, className: string, title: string) => (
+    <form action={setRecommendationStatus}>
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="slug" value={person.slug} />
+      <input type="hidden" name="status" value={status} />
+      <SubmitButton className={className} pendingText="…" title={title}>
+        {label}
+      </SubmitButton>
+    </form>
+  );
 
   return (
     <>
@@ -55,11 +101,11 @@ export default async function PersonPage({ params }: { params: Promise<{ slug: s
 
       <section className="card">
         <div className="row spread">
-          <h2>Recommended papers</h2>
+          <h2>Papers</h2>
           <form action={scanNow}>
             <input type="hidden" name="id" value={person.id} />
             <input type="hidden" name="slug" value={person.slug} />
-            <SubmitButton pendingText="Scanning… this can take a few minutes" title="Check for new papers now">
+            <SubmitButton pendingText="Scanning… this can take a few minutes" title="Check for new papers since the last scan">
               Scan now
             </SubmitButton>
           </form>
@@ -72,11 +118,24 @@ export default async function PersonPage({ params }: { params: Promise<{ slug: s
           ) : (
             "Not scanned yet. "
           )}
-          {person.last_scan_status}
+          {person.last_scan_status} Each new scan moves unsaved recommendations to Deleted.
         </p>
 
+        <nav className="tabs">
+          {TABS.map((t) => (
+            <Link
+              key={t.param}
+              href={t.param === "recommended" ? `/${person.slug}` : `/${person.slug}?list=${t.param}`}
+              className={t.status === tab.status ? "active" : ""}
+              scroll={false}
+            >
+              {t.label} <span className="tab-count">{counts[t.status]}</span>
+            </Link>
+          ))}
+        </nav>
+
         {recs.length === 0 ? (
-          <p className="empty">No open recommendations.</p>
+          <p className="empty">{EMPTY[tab.status]}</p>
         ) : (
           <ul className="papers">
             {recs.map((r) => (
@@ -110,17 +169,45 @@ export default async function PersonPage({ params }: { params: Promise<{ slug: s
                     </div>
                   </div>
                 </details>
-                <form action={dismissRecommendation} className="remove">
-                  <input type="hidden" name="id" value={r.id} />
-                  <input type="hidden" name="slug" value={person.slug} />
-                  <SubmitButton className="ghost" pendingText="…" title="Not relevant: remove from the list">
-                    Remove
-                  </SubmitButton>
-                </form>
+                <div className="item-actions">
+                  {tab.status === "new" && (
+                    <>
+                      {move(r.id, "saved", "Save", "", "Keep this paper in your Saved list")}
+                      {move(r.id, "deleted", "Delete", "ghost", "Not relevant: move to Deleted")}
+                    </>
+                  )}
+                  {tab.status === "saved" && (
+                    <>
+                      {move(r.id, "new", "Unsave", "ghost", "Move back to Recommended")}
+                      {move(r.id, "deleted", "Delete", "ghost", "Move to Deleted")}
+                    </>
+                  )}
+                  {tab.status === "deleted" && (
+                    <>
+                      {move(r.id, "new", "Restore", "", "Move back to Recommended")}
+                      {move(r.id, "saved", "Save", "ghost", "Move to Saved")}
+                    </>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         )}
+        {recs.length >= 300 && <p className="muted small">Showing the 300 most recent.</p>}
+      </section>
+
+      <section className="card">
+        <h2>Search a time window</h2>
+        <p className="muted small">
+          Look through older publications, up to {MAX_RANGE_YEARS} years at a time. Results go to your Recommended list.
+          This runs on top of your weekly/monthly schedule, which keeps going as set above.
+        </p>
+        <RangeSearch
+          personId={person.id}
+          hasInterests={!!person.interests.trim()}
+          initialJob={job ?? null}
+          maxYears={MAX_RANGE_YEARS}
+        />
       </section>
     </>
   );

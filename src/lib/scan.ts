@@ -1,6 +1,50 @@
+import { createHash } from "node:crypto";
 import { ensureSchema, getVenues, sql, type Person } from "./db";
 import { addAbstracts, fetchCandidates, type Paper } from "./sources";
-import { rankPapers } from "./rank";
+import { rankPapers, type Match } from "./rank";
+
+/** Moves everything still on the Recommended list (not saved) to Deleted. */
+export async function archiveUnsaved(personId: number) {
+  await sql`UPDATE recommendations SET status = 'deleted', status_changed_at = now()
+    WHERE person_id = ${personId} AND status = 'new'`;
+}
+
+export async function storeMatches(personId: number, matches: Match[]) {
+  for (const m of matches) {
+    const p = m.paper;
+    await sql`
+      INSERT INTO recommendations (person_id, doi, title, venue, authors, published, abstract, url, score, reason)
+      VALUES (${personId}, ${p.doi}, ${p.title}, ${p.venue}, ${p.authors}, ${p.published}, ${p.abstract}, ${p.url}, ${m.score}, ${m.reason})
+      ON CONFLICT (person_id, doi) DO NOTHING`;
+  }
+}
+
+function interestsHash(interests: string): string {
+  return createHash("sha1").update(interests.trim()).digest("hex").slice(0, 16);
+}
+
+/**
+ * Leaves out papers already recommended to this person (in any list, so
+ * deleted papers never come back) and papers Claude already judged against
+ * the current wording of their interests.
+ */
+export async function unseenPapers(person: Person, papers: Paper[]): Promise<Paper[]> {
+  const hash = interestsHash(person.interests);
+  const rows = await sql`
+    SELECT doi FROM recommendations WHERE person_id = ${person.id}
+    UNION SELECT doi FROM checked WHERE person_id = ${person.id} AND interests_hash = ${hash}`;
+  const seen = new Set(rows.map((r) => String(r.doi)));
+  return papers.filter((p) => !seen.has(p.doi));
+}
+
+export async function markChecked(person: Person, papers: Paper[]) {
+  if (papers.length === 0) return;
+  const hash = interestsHash(person.interests);
+  const dois = papers.map((p) => p.doi);
+  await sql`INSERT INTO checked (person_id, doi, interests_hash)
+    SELECT ${person.id}, d, ${hash} FROM unnest(${dois}::text[]) AS d
+    ON CONFLICT DO NOTHING`;
+}
 
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_LOOKBACK_DAYS = 62;
@@ -44,29 +88,35 @@ async function finish(personId: number, status: string, scannedUntil: Date | nul
   }
 }
 
-async function scanOne(person: Person, pool: Paper[], now: Date, sourceErrors: string[]): Promise<string> {
+async function scanOne(
+  person: Person,
+  pool: Paper[],
+  now: Date,
+  sourceErrors: string[],
+  deadline: number,
+): Promise<{ status: string; complete: boolean }> {
   const from = windowStart(person, now);
   // Crossref dates are by day, so compare on the date to avoid dropping same-day records.
   const fromDay = from.toISOString().slice(0, 10);
   const candidates = pool.filter((p) => p.created.slice(0, 10) >= fromDay);
+  const fresh = await unseenPapers(person, candidates);
 
-  // Don't ask about papers this person has already seen (including removed ones).
-  const seenRows = await sql`SELECT doi FROM recommendations WHERE person_id = ${person.id}`;
-  const seen = new Set(seenRows.map((r) => String(r.doi)));
-  const fresh = candidates.filter((p) => !seen.has(p.doi));
+  const { matches, judged } = await rankPapers(person.interests, fresh, { deadline });
+  const complete = judged.length === fresh.length;
 
-  const matches = await rankPapers(person.interests, fresh);
-  for (const m of matches) {
-    const p = m.paper;
-    await sql`
-      INSERT INTO recommendations (person_id, doi, title, venue, authors, published, abstract, url, score, reason)
-      VALUES (${person.id}, ${p.doi}, ${p.title}, ${p.venue}, ${p.authors}, ${p.published}, ${p.abstract}, ${p.url}, ${m.score}, ${m.reason})
-      ON CONFLICT (person_id, doi) DO NOTHING`;
-  }
+  // A new scan replaces the Recommended list: anything not saved moves to Deleted.
+  // A scan that continues an unfinished one keeps what that one already found.
+  if (!person.scan_pending) await archiveUnsaved(person.id);
+  await storeMatches(person.id, matches);
+  await markChecked(person, judged);
+  await sql`UPDATE people SET scan_pending = ${!complete} WHERE id = ${person.id}`;
+
   const range = `${fromDay} to ${now.toISOString().slice(0, 10)}`;
-  let status = `${matches.length} new recommendation${matches.length === 1 ? "" : "s"} from ${fresh.length} papers published ${range}.`;
+  let status = complete
+    ? `${matches.length} new recommendation${matches.length === 1 ? "" : "s"} from ${fresh.length} new papers published ${range}.`
+    : `Checked ${judged.length} of ${fresh.length} new papers published ${range} and found ${matches.length}. The rest are checked on the next run (or click Scan now again).`;
   if (sourceErrors.length) status += ` Some venues could not be read: ${sourceErrors.join("; ")}`;
-  return status;
+  return { status, complete };
 }
 
 /**
@@ -110,8 +160,9 @@ export async function runScans(people: Person[], opts: { timeBudgetMs?: number }
           continue;
         }
         try {
-          const status = await scanOne(person, papers, now, errors);
-          await finish(person.id, status, now);
+          const { status, complete } = await scanOne(person, papers, now, errors, started + budget);
+          // Only move the start of the next window forward once everything in this one was checked.
+          await finish(person.id, status, complete ? now : null);
           results.push({ name: person.name, status });
         } catch (err) {
           const msg = `Scan failed: ${err instanceof Error ? err.message : String(err)}`;

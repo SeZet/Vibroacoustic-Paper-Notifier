@@ -12,6 +12,7 @@ export interface Person {
   last_scan_at: string | null;
   last_scan_status: string | null;
   scanning_since: string | null;
+  scan_pending: boolean;
 }
 
 export interface Venue {
@@ -20,6 +21,20 @@ export interface Venue {
   issns: string;
   match_text: string;
   enabled: boolean;
+}
+
+export type RecStatus = "new" | "saved" | "deleted";
+
+export interface RangeJob {
+  id: number;
+  person_id: number;
+  from_date: string;
+  to_date: string;
+  cursor_date: string;
+  status: "running" | "paused" | "done" | "cancelled";
+  checked: number;
+  found: number;
+  message: string | null;
 }
 
 export interface Recommendation {
@@ -34,6 +49,7 @@ export interface Recommendation {
   url: string;
   score: number;
   reason: string;
+  status: RecStatus;
   created_at: string;
 }
 
@@ -101,6 +117,33 @@ async function createSchema() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (person_id, doi)
   )`;
+  // v2: Recommended / Saved / Deleted lists replace the old "dismissed" flag.
+  await sql`ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new'`;
+  await sql`ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ NOT NULL DEFAULT now()`;
+  await sql`UPDATE recommendations SET status = 'deleted', dismissed = FALSE WHERE dismissed`;
+  await sql`CREATE INDEX IF NOT EXISTS recommendations_person_status ON recommendations (person_id, status)`;
+  // Every paper Claude has judged for a person, per version of their interests,
+  // so interrupted scans can continue and nothing is paid for twice.
+  await sql`CREATE TABLE IF NOT EXISTS checked (
+    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    doi TEXT NOT NULL,
+    interests_hash TEXT NOT NULL,
+    PRIMARY KEY (person_id, interests_hash, doi)
+  )`;
+  await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS scan_pending BOOLEAN NOT NULL DEFAULT FALSE`;
+  await sql`CREATE TABLE IF NOT EXISTS range_jobs (
+    id SERIAL PRIMARY KEY,
+    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    from_date DATE NOT NULL,
+    to_date DATE NOT NULL,
+    cursor_date DATE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    checked INTEGER NOT NULL DEFAULT 0,
+    found INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    locked_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`;
   await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
 
   for (const name of DEFAULT_PEOPLE) {
@@ -130,7 +173,7 @@ export function slugify(name: string): string {
 export async function getPeople(): Promise<(Person & { open_count: number })[]> {
   await ensureSchema();
   const rows = await sql`
-    SELECT p.*, (SELECT count(*)::int FROM recommendations r WHERE r.person_id = p.id AND NOT r.dismissed) AS open_count
+    SELECT p.*, (SELECT count(*)::int FROM recommendations r WHERE r.person_id = p.id AND r.status = 'new') AS open_count
     FROM people p ORDER BY p.name`;
   return rows as unknown as (Person & { open_count: number })[];
 }
@@ -141,13 +184,39 @@ export async function getPersonBySlug(slug: string): Promise<Person | null> {
   return (rows[0] as unknown as Person) ?? null;
 }
 
-export async function getRecommendations(personId: number): Promise<Recommendation[]> {
-  const rows = await sql`
-    SELECT id, person_id, doi, title, venue, authors, published::text AS published, abstract, url, score, reason, created_at
-    FROM recommendations
-    WHERE person_id = ${personId} AND NOT dismissed
-    ORDER BY created_at::date DESC, score DESC, published DESC NULLS LAST`;
+const LIST_LIMIT = 300;
+
+export async function getRecommendations(personId: number, status: RecStatus): Promise<Recommendation[]> {
+  const rows =
+    status === "new"
+      ? await sql`
+        SELECT id, person_id, doi, title, venue, authors, published::text AS published, abstract, url, score, reason, status, created_at
+        FROM recommendations WHERE person_id = ${personId} AND status = 'new'
+        ORDER BY score DESC, published DESC NULLS LAST LIMIT ${LIST_LIMIT}`
+      : await sql`
+        SELECT id, person_id, doi, title, venue, authors, published::text AS published, abstract, url, score, reason, status, created_at
+        FROM recommendations WHERE person_id = ${personId} AND status = ${status}
+        ORDER BY status_changed_at DESC, id DESC LIMIT ${LIST_LIMIT}`;
   return rows as unknown as Recommendation[];
+}
+
+export async function getStatusCounts(personId: number): Promise<Record<RecStatus, number>> {
+  const rows = await sql`
+    SELECT status, count(*)::int AS n FROM recommendations WHERE person_id = ${personId} GROUP BY status`;
+  const counts: Record<RecStatus, number> = { new: 0, saved: 0, deleted: 0 };
+  for (const r of rows) counts[r.status as RecStatus] = Number(r.n);
+  return counts;
+}
+
+export async function getActiveRangeJob(personId: number): Promise<RangeJob | null> {
+  const rows = await sql`
+    SELECT id, person_id, from_date::text AS from_date, to_date::text AS to_date, cursor_date::text AS cursor_date,
+           status, checked, found, message
+    FROM range_jobs
+    WHERE person_id = ${personId}
+      AND (status IN ('running', 'paused') OR (status = 'done' AND created_at > now() - interval '7 days'))
+    ORDER BY id DESC LIMIT 1`;
+  return (rows[0] as unknown as RangeJob) ?? null;
 }
 
 export async function getVenues(): Promise<Venue[]> {
