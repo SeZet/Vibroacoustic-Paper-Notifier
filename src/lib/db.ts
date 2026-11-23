@@ -25,18 +25,6 @@ export interface Venue {
 
 export type RecStatus = "new" | "saved" | "deleted";
 
-export interface RangeJob {
-  id: number;
-  person_id: number;
-  from_date: string;
-  to_date: string;
-  cursor_date: string;
-  status: "running" | "paused" | "done" | "cancelled";
-  checked: number;
-  found: number;
-  message: string | null;
-}
-
 export interface Recommendation {
   id: number;
   person_id: number;
@@ -131,19 +119,6 @@ async function createSchema() {
     PRIMARY KEY (person_id, interests_hash, doi)
   )`;
   await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS scan_pending BOOLEAN NOT NULL DEFAULT FALSE`;
-  await sql`CREATE TABLE IF NOT EXISTS range_jobs (
-    id SERIAL PRIMARY KEY,
-    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    from_date DATE NOT NULL,
-    to_date DATE NOT NULL,
-    cursor_date DATE NOT NULL,
-    status TEXT NOT NULL DEFAULT 'running',
-    checked INTEGER NOT NULL DEFAULT 0,
-    found INTEGER NOT NULL DEFAULT 0,
-    message TEXT,
-    locked_until TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`;
   await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
 
   for (const name of DEFAULT_PEOPLE) {
@@ -206,17 +181,6 @@ export async function getStatusCounts(personId: number): Promise<Record<RecStatu
   const counts: Record<RecStatus, number> = { new: 0, saved: 0, deleted: 0 };
   for (const r of rows) counts[r.status as RecStatus] = Number(r.n);
   return counts;
-}
-
-export async function getActiveRangeJob(personId: number): Promise<RangeJob | null> {
-  const rows = await sql`
-    SELECT id, person_id, from_date::text AS from_date, to_date::text AS to_date, cursor_date::text AS cursor_date,
-           status, checked, found, message
-    FROM range_jobs
-    WHERE person_id = ${personId}
-      AND (status IN ('running', 'paused') OR (status = 'done' AND created_at > now() - interval '7 days'))
-    ORDER BY id DESC LIMIT 1`;
-  return (rows[0] as unknown as RangeJob) ?? null;
 }
 
 export async function getVenues(): Promise<Venue[]> {

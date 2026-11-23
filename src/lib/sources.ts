@@ -124,20 +124,13 @@ function toPaper(item: CrossrefItem, fallbackVenue: string): Paper | null {
 
 const SELECT = "DOI,title,container-title,author,created,published,published-online,published-print,abstract,type,event";
 
-/**
- * "created": when the DOI was registered (used by the weekly/monthly scans, so
- * nothing published online since the last scan is missed).
- * "pub": the publication date (used by time-window searches, because older
- * papers sometimes had their DOIs registered years later).
- */
-export type DateField = "created" | "pub";
-
-function venueQuery(venue: Venue, from: Date, until: Date, field: DateField): string | null {
+/** Crossref query for records of this venue whose DOI was registered between `from` and `until`. */
+function venueQuery(venue: Venue, from: Date, until: Date): string | null {
   const issns = venue.issns
     .split(/[,;\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  const dateFilter = `from-${field}-date:${day(from)},until-${field}-date:${day(until)}`;
+  const dateFilter = `from-created-date:${day(from)},until-created-date:${day(until)}`;
   const match = venue.match_text.trim();
   if (issns.length > 0) {
     const issnFilter = issns.map((i) => `issn:${i}`).join(",");
@@ -154,8 +147,8 @@ function matchesVenue(item: CrossrefItem, match: string): boolean {
   return container.includes(match);
 }
 
-async function crossrefVenue(venue: Venue, from: Date, until: Date, field: DateField): Promise<Paper[]> {
-  const base = venueQuery(venue, from, until, field);
+async function crossrefVenue(venue: Venue, from: Date, until: Date): Promise<Paper[]> {
+  const base = venueQuery(venue, from, until);
   if (!base) return [];
   const issns = venue.issns.trim();
   const match = venue.match_text.trim().toLowerCase();
@@ -182,14 +175,13 @@ export async function fetchCandidates(
   venues: Venue[],
   from: Date,
   until: Date,
-  field: DateField = "created",
 ): Promise<{ papers: Paper[]; errors: string[] }> {
   const errors: string[] = [];
   const results = await Promise.all(
     venues
       .filter((v) => v.enabled)
       .map((v) =>
-        crossrefVenue(v, from, until, field).catch((err) => {
+        crossrefVenue(v, from, until).catch((err) => {
           errors.push(`${v.name}: ${err instanceof Error ? err.message : String(err)}`);
           return [] as Paper[];
         }),
@@ -198,41 +190,6 @@ export async function fetchCandidates(
   const byDoi = new Map<string, Paper>();
   for (const p of results.flat()) if (!byDoi.has(p.doi)) byDoi.set(p.doi, p);
   return { papers: [...byDoi.values()], errors };
-}
-
-/** Estimates how many papers the enabled venues published in a time window, without downloading them. */
-export async function countCandidates(
-  venues: Venue[],
-  from: Date,
-  until: Date,
-): Promise<{ total: number; perVenue: { name: string; count: number }[]; errors: string[] }> {
-  const errors: string[] = [];
-  const perVenue = await Promise.all(
-    venues
-      .filter((v) => v.enabled)
-      .map(async (v) => {
-        const base = venueQuery(v, from, until, "pub");
-        if (!base) return { name: v.name, count: 0 };
-        try {
-          if (v.issns.trim()) {
-            const data = (await fetchJson(`${base}&rows=0${politeParams()}`)) as { message: { "total-results": number } };
-            return { name: v.name, count: data.message["total-results"] ?? 0 };
-          }
-          // Title search: the total includes loose matches, so scale it by the share of real matches in a sample.
-          const data = (await fetchJson(`${base}&rows=200&select=container-title,event${politeParams()}`)) as {
-            message: { "total-results": number; items: CrossrefItem[] };
-          };
-          const items = data.message.items ?? [];
-          if (items.length === 0) return { name: v.name, count: 0 };
-          const share = items.filter((i) => matchesVenue(i, v.match_text.trim().toLowerCase())).length / items.length;
-          return { name: v.name, count: Math.round(share * (data.message["total-results"] ?? 0)) };
-        } catch (err) {
-          errors.push(`${v.name}: ${err instanceof Error ? err.message : String(err)}`);
-          return { name: v.name, count: 0 };
-        }
-      }),
-  );
-  return { total: perVenue.reduce((a, b) => a + b.count, 0), perVenue, errors };
 }
 
 /* ------------------------------------------------------------------ */
