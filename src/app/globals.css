@@ -105,7 +105,22 @@ button:disabled { opacity: 0.6; cursor: progress; }
 .paper-body { padding: 10px 0 0; }
 .abstract { white-space: pre-line; }
 .reason { font-size: 0.9rem; }
-.remove button { padding: 4px 10px; font-size: 0.8rem; }
+.item-actions { display: flex; flex-direction: column; gap: 4px; }
+.item-actions button { padding: 4px 10px; font-size: 0.8rem; width: 100%; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-top: 12px; }
+.tabs a { padding: 6px 12px; text-decoration: none; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-count { font-size: 0.75rem; color: var(--muted); font-weight: normal; }
+.tabs + .papers li:first-child { border-top: 0; }
+
+.range input[type="date"] { width: auto; }
+.bar { height: 8px; background: var(--accent-soft); border-radius: 999px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
+.estimate { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; }
+.estimate p { margin: 0; }
+.warn { color: var(--danger); }
+.ok { color: var(--good); }
 
 .venues { width: 100%; border-collapse: collapse; }
 .venues th, .venues td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -121,3 +136,4 @@ button:disabled { opacity: 0.6; cursor: progress; }
   .venues td { display: block; border: 0; padding: 2px 0; }
   .venues .actions { justify-content: flex-start; }
 }
+.stack label.row, .row label.row { flex-direction: row; align-items: center; }

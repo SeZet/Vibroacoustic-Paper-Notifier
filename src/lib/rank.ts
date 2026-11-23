@@ -8,6 +8,25 @@ export interface Match {
 }
 
 const BATCH_SIZE = 60;
+
+export function modelName(): string {
+  return process.env.CLAUDE_MODEL || "claude-opus-5-5";
+}
+
+// USD per million tokens (input, output). Unknown models are priced like Opus.
+const PRICES: Record<string, [number, number]> = {
+  "claude-opus-5-5": [4, 20],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-haiku-5-5": [0.1, 0.5],
+};
+
+/** Rough Claude cost for judging this many papers for one person. */
+export function estimateCostUsd(paperCount: number): number {
+  const [inPrice, outPrice] = PRICES[modelName()] ?? PRICES["claude-opus-5-5"];
+  // About 320 input tokens per paper (title, venue, shortened abstract, share of the
+  // instructions) and about 40 output tokens per paper (scores, reasons, thinking).
+  return (paperCount * (320 * inPrice + 40 * outPrice)) / 1_000_000;
+}
 const CONCURRENCY = 3;
 const ABSTRACT_CHARS = 900;
 
@@ -57,7 +76,7 @@ function describe(p: Paper, id: number): string {
 async function rankBatch(client: Anthropic, interests: string, batch: Paper[]): Promise<Match[]> {
   const list = batch.map((p, i) => describe(p, i)).join("\n\n");
   const response = await client.beta.messages.create({
-    model: process.env.CLAUDE_MODEL || "claude-opus-5-5",
+    model: modelName(),
     max_tokens: 8000,
     // If the main model declines a request, the API retries it on a fallback model.
     betas: ["server-side-fallback-2026-07-01"],
@@ -96,33 +115,52 @@ async function rankBatch(client: Anthropic, interests: string, batch: Paper[]): 
   return out;
 }
 
-/** Asks Claude which of the papers match the researcher's interests. */
-export async function rankPapers(interests: string, papers: Paper[]): Promise<Match[]> {
+export interface RankResult {
+  /** Papers at or above MIN_SCORE, best first. */
+  matches: Match[];
+  /** Every paper Claude actually judged (batches that failed or were not reached are left out). */
+  judged: Paper[];
+}
+
+/**
+ * Asks Claude which of the papers match the researcher's interests.
+ * Stops starting new batches after `deadline` (ms timestamp) so a call fits in
+ * Vercel's time limit; the papers not judged can be handled in a later run.
+ */
+export async function rankPapers(interests: string, papers: Paper[], opts: { deadline?: number } = {}): Promise<RankResult> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is not set in the Vercel environment variables.");
   }
-  if (papers.length === 0) return [];
+  if (papers.length === 0) return { matches: [], judged: [] };
   const client = new Anthropic({ maxRetries: 3 });
   const batches: Paper[][] = [];
   for (let i = 0; i < papers.length; i += BATCH_SIZE) batches.push(papers.slice(i, i + BATCH_SIZE));
 
   const results: Match[] = [];
+  const judged: Paper[] = [];
   let failures = 0;
+  let lastError: unknown = null;
   let next = 0;
   async function worker() {
     while (next < batches.length) {
+      if (opts.deadline && Date.now() > opts.deadline) return;
       const batch = batches[next++];
       try {
         results.push(...(await rankBatch(client, interests, batch)));
+        judged.push(...batch);
       } catch (err) {
         failures++;
+        lastError = err;
         console.error("Ranking batch failed", err);
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
-  if (failures === batches.length) throw new Error("Claude API calls failed. Check the API key and credit balance.");
+  if (judged.length === 0 && failures > 0) {
+    const detail = lastError instanceof Error ? ` (${lastError.message})` : "";
+    throw new Error(`Claude API calls failed${detail}. Check the API key and credit balance.`);
+  }
 
   const minScore = Number(process.env.MIN_SCORE) || 6;
-  return results.filter((m) => m.score >= minScore).sort((a, b) => b.score - a.score);
+  return { matches: results.filter((m) => m.score >= minScore).sort((a, b) => b.score - a.score), judged };
 }

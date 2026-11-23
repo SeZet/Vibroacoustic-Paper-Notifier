@@ -6,8 +6,13 @@ A small website for our vibroacoustics group. Each member has a section where th
 - Write your interests in plain text or bullet points and pick **weekly** or **monthly**.
 - Each recommendation shows the title and the journal or conference. Click it to see the abstract (when one is available) and why it was recommended.
 - **Open paper** takes you to the publisher's page (via the DOI link), for example Elsevier, ASA or AIAA.
-- **Remove** takes a paper off your list. A removed paper is never suggested to you again.
-- **Scan now** runs a check immediately instead of waiting for the schedule.
+- Every section has three lists: **Recommended**, **Saved** and **Deleted**.
+  - **Save** keeps a paper in your Saved list. Saved papers stay until you unsave or delete them.
+  - **Delete** moves a paper to Deleted. **Restore** brings it back to Recommended.
+  - **Each new scan moves whatever is still on your Recommended list (and not saved) to Deleted**, so Recommended always shows the latest scan's results. Nothing is lost: it's all in Deleted.
+  - A paper is never recommended to you twice, even if you deleted it.
+- **Scan now** runs a check immediately instead of waiting for the schedule. It covers the time since your last scan.
+- **Search a time window** looks through older publications, for example the last 3 years, up to 10 years at a time. It first shows how many papers are in the window and roughly what the Claude API will cost, and only starts when you confirm. It runs in steps of two weeks while your page is open (you see a progress bar); if you close the page it pauses and continues when you come back. Your weekly/monthly schedule keeps running independently.
 - The **Venues** page lists the journals and conferences that are checked. Anyone can add, pause or delete venues.
 
 There is no login: anyone with the link can view and edit. Share the link only with the group.
@@ -80,6 +85,7 @@ From then on, scans run automatically. You can see the scheduled job under **Set
 
 - **Vercel** Hobby plan and **Neon** free plan: free for this use.
 - **Crossref, OpenAlex, Semantic Scholar**: free.
+- **Time-window searches** are the expensive part: the starter venues publish very roughly 5,000 to 8,000 papers a year, which comes to roughly 10 to 15 USD per person per year searched with the default model (about half with `claude-sonnet-5-5`, well under 1 USD with `claude-haiku-5-5`). The site shows an estimate before you start. Papers already checked for you are not paid for again, unless you change your research interests.
 - **Claude API**: depends on how many papers are published and the model. With the default model, expect very roughly 0.10 to 0.50 USD per person per scan for the starter venues (a monthly scan covers about four times as many papers as a weekly one, so the monthly total is similar). Switching `CLAUDE_MODEL` to `claude-sonnet-5-5` halves that; `claude-haiku-5-5` costs a small fraction. A large conference (e.g. when the Inter-Noise proceedings are published all at once) makes that one scan more expensive. You can see actual usage in the Anthropic Console.
 
 ## Changing things later
@@ -94,6 +100,8 @@ From then on, scans run automatically. You can see the scheduled job under **Set
 - **A scan says "ANTHROPIC_API_KEY is not set" or "Claude API calls failed"**: check the key in step 4, that you have credit in the Anthropic Console, and redeploy.
 - **"Some venues could not be read"**: Crossref was temporarily unreachable for that venue. The next scan covers the gap, since each scan starts where the last successful one ended.
 - **Scan now seems stuck**: a scan can take a few minutes. If the page times out, reload it; the result appears once the scan finishes.
+- **"Checked X of Y new papers…"**: there were too many new papers to judge within Vercel's 5-minute limit (this can happen when a big conference proceedings appears at once). The rest are checked on the next scheduled run, or click Scan now again.
+- **A time-window search says "Paused"**: usually the Claude API rate limit or credit ran out, or Crossref was unreachable. Click **Retry**. New Anthropic accounts have low rate limits; they rise automatically as you use the API.
 
 ## Running it on your own computer (optional, for developers)
 
