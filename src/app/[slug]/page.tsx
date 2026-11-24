@@ -111,7 +111,10 @@ export default async function PersonPage({
           ) : (
             "Not scanned yet. "
           )}
-          {person.last_scan_status} Each new scan moves unsaved recommendations to Deleted.
+          {person.last_scan_status}
+        </p>
+        <p className="notice small">
+          <span aria-hidden="true">⚠️</span> Each new scan moves unsaved recommendations to Deleted.
         </p>
 
         <nav className="tabs">

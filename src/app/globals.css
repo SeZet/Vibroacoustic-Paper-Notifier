@@ -66,6 +66,7 @@ h2 { font-size: 1.15rem; margin: 0 0 0.75rem; }
 
 .muted { color: var(--muted); }
 .small { font-size: 0.85rem; }
+.notice { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 6px; padding: 6px 10px; margin: 8px 0 0; }
 .empty { color: var(--muted); font-style: italic; }
 
 .stack { display: flex; flex-direction: column; gap: 12px; }
