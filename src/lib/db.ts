@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { DEFAULT_PEOPLE, DEFAULT_VENUES } from "./defaults";
+import { arxivStarterVenue, DEFAULT_PEOPLE, DEFAULT_VENUES, type VenueKind } from "./defaults";
 
 export type Frequency = "weekly" | "monthly";
 
@@ -21,6 +21,8 @@ export interface Venue {
   issns: string;
   match_text: string;
   enabled: boolean;
+  kind: VenueKind;
+  feed_url: string;
 }
 
 export type RecStatus = "new" | "saved" | "deleted";
@@ -132,6 +134,10 @@ async function createSchema() {
     cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0
   )`;
 
+  // v3: journal RSS feeds and arXiv as extra sources.
+  await sql`ALTER TABLE venues ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'journal'`;
+  await sql`ALTER TABLE venues ADD COLUMN IF NOT EXISTS feed_url TEXT NOT NULL DEFAULT ''`;
+
   for (const name of DEFAULT_PEOPLE) {
     await sql`INSERT INTO people (name, slug) VALUES (${name}, ${slugify(name)})
       ON CONFLICT (name) DO NOTHING`;
@@ -141,9 +147,26 @@ async function createSchema() {
   const seeded = await sql`SELECT value FROM meta WHERE key = 'venues_seeded'`;
   if (seeded.length === 0) {
     for (const v of DEFAULT_VENUES) {
-      await sql`INSERT INTO venues (name, issns, match_text) VALUES (${v.name}, ${v.issns}, ${v.match_text})`;
+      await sql`INSERT INTO venues (name, kind, issns, match_text, feed_url)
+        VALUES (${v.name}, ${v.kind ?? "journal"}, ${v.issns}, ${v.match_text}, ${v.feed_url ?? ""})`;
     }
     await sql`INSERT INTO meta (key, value) VALUES ('venues_seeded', 'yes') ON CONFLICT DO NOTHING`;
+    await sql`INSERT INTO meta (key, value) VALUES ('sources_v3_seeded', 'yes') ON CONFLICT DO NOTHING`;
+  }
+
+  // Sites set up before feeds and arXiv existed: add the starter feeds to the
+  // matching journals (found by ISSN) and the arXiv venue, once.
+  const v3 = await sql`SELECT value FROM meta WHERE key = 'sources_v3_seeded'`;
+  if (v3.length === 0) {
+    for (const v of DEFAULT_VENUES) {
+      const issn = v.issns.split(",")[0]?.trim();
+      if (!v.feed_url || !issn) continue;
+      await sql`UPDATE venues SET feed_url = ${v.feed_url}
+        WHERE feed_url = '' AND kind = 'journal' AND issns LIKE ${"%" + issn + "%"}`;
+    }
+    const a = arxivStarterVenue();
+    await sql`INSERT INTO venues (name, kind, issns, match_text) VALUES (${a.name}, 'arxiv', '', ${a.match_text})`;
+    await sql`INSERT INTO meta (key, value) VALUES ('sources_v3_seeded', 'yes') ON CONFLICT DO NOTHING`;
   }
 }
 

@@ -161,7 +161,11 @@ export default async function PersonPage({
                       <a className="button primary" href={r.url} target="_blank" rel="noopener noreferrer">
                         Open paper ↗
                       </a>
-                      <span className="muted small">DOI {r.doi}</span>
+                      {r.doi.startsWith("10.") ? (
+                        <span className="muted small">DOI {r.doi}</span>
+                      ) : r.doi.startsWith("arxiv:") ? (
+                        <span className="muted small">arXiv {r.doi.slice(6)}</span>
+                      ) : null}
                     </div>
                   </div>
                 </details>

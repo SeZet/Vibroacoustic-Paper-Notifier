@@ -34,7 +34,15 @@ export async function unseenPapers(person: Person, papers: Paper[]): Promise<Pap
     SELECT doi FROM recommendations WHERE person_id = ${person.id}
     UNION SELECT doi FROM checked WHERE person_id = ${person.id} AND interests_hash = ${hash}`;
   const seen = new Set(rows.map((r) => String(r.doi)));
-  return papers.filter((p) => !seen.has(p.doi));
+  // The same paper can come back under another key (a feed link first, its DOI later),
+  // so titles already recommended count as seen too.
+  const titleRows = await sql`SELECT title FROM recommendations WHERE person_id = ${person.id}`;
+  const seenTitles = new Set(titleRows.map((r) => titleKey(String(r.title))));
+  return papers.filter((p) => !seen.has(p.doi) && !seenTitles.has(titleKey(p.title)));
+}
+
+function titleKey(t: string): string {
+  return t.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 export async function markChecked(person: Person, papers: Paper[]) {
@@ -93,6 +101,7 @@ async function scanOne(
   pool: Paper[],
   now: Date,
   sourceErrors: string[],
+  sourceWarnings: string[],
   deadline: number,
 ): Promise<{ status: string; complete: boolean }> {
   const from = windowStart(person, now);
@@ -119,6 +128,7 @@ async function scanOne(
     ? `${matches.length} new recommendation${matches.length === 1 ? "" : "s"} from ${fresh.length} new papers published ${range}.`
     : `Checked ${judged.length} of ${fresh.length} new papers published ${range} and found ${matches.length}. The rest are checked on the next run (or click Scan now again).`;
   if (sourceErrors.length) status += ` Some venues could not be read: ${sourceErrors.join("; ")}. They are read again on the next run.`;
+  if (sourceWarnings.length) status += ` Some journal feeds could not be read (those journals were still checked through Crossref): ${sourceWarnings.join("; ")}.`;
   return { status, complete };
 }
 
@@ -146,9 +156,9 @@ export async function runScans(people: Person[], opts: { timeBudgetMs?: number }
   try {
     const earliest = new Date(Math.min(...ready.map((p) => windowStart(p, now).getTime())));
     const venues = await getVenues();
-    const { papers, errors } = await fetchCandidates(venues, earliest, now);
+    const { papers, errors, warnings } = await fetchCandidates(venues, earliest, now);
     if (papers.length === 0 && errors.length > 0) {
-      throw new Error(`Could not reach Crossref: ${errors.join("; ")}`);
+      throw new Error(`Could not read any venue: ${errors.join("; ")}`);
     }
     await addAbstracts(papers);
 
@@ -163,7 +173,7 @@ export async function runScans(people: Person[], opts: { timeBudgetMs?: number }
           continue;
         }
         try {
-          const { status, complete } = await scanOne(person, papers, now, errors, started + budget);
+          const { status, complete } = await scanOne(person, papers, now, errors, warnings, started + budget);
           // Only move the start of the next window forward once everything in this one was checked.
           await finish(person.id, status, complete ? now : null);
           results.push({ name: person.name, status });

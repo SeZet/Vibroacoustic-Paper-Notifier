@@ -1,6 +1,11 @@
 import type { Venue } from "./db";
+import { arxivVenue, feedVenue } from "./feeds";
 
-/** A candidate publication gathered from the bibliographic databases. */
+/**
+ * A candidate publication gathered from the bibliographic databases.
+ * `doi` is the paper's key: a lowercase DOI when known, otherwise
+ * `arxiv:<id>` for preprints or `url:<link>` for feed items without a DOI.
+ */
 export interface Paper {
   doi: string;
   title: string;
@@ -188,30 +193,106 @@ async function crossrefVenue(venue: Venue, from: Date, until: Date): Promise<Pap
   return papers;
 }
 
-/** Collects new publications from all enabled venues registered between `from` and `until`. */
+function normTitle(t: string): string {
+  return t.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Merges papers found by several sources. Records with the same DOI, or the
+ * same title, count as one paper. The first one wins (Crossref is listed
+ * first), and a missing abstract or author list is filled from the others.
+ */
+export function dedupe(papers: Paper[]): Paper[] {
+  const byKey = new Map<string, Paper>();
+  const out: Paper[] = [];
+  for (const p of papers) {
+    const titleKey = `t:${normTitle(p.title)}`;
+    const existing = byKey.get(p.doi) ?? (titleKey.length > 12 ? byKey.get(titleKey) : undefined);
+    if (existing) {
+      if (!existing.abstract && p.abstract) existing.abstract = p.abstract;
+      if (!existing.authors && p.authors) existing.authors = p.authors;
+      if (!existing.published && p.published) existing.published = p.published;
+      // Keep a real DOI (and its link) over a feed or arXiv identifier.
+      if (!existing.doi.startsWith("10.") && p.doi.startsWith("10.")) {
+        existing.doi = p.doi;
+        existing.url = p.url;
+        byKey.set(p.doi, existing);
+      }
+      continue;
+    }
+    byKey.set(p.doi, p);
+    byKey.set(titleKey, p);
+    out.push(p);
+  }
+  return out;
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Collects new publications from all enabled venues registered between `from` and `until`:
+ * Crossref for journals and conferences, plus each venue's RSS feed if it has one,
+ * plus arXiv for arXiv venues.
+ *
+ * `errors` are sources whose papers are missing (the scan window stays open).
+ * `warnings` are feeds that could not be read; their journals are still covered by Crossref.
+ */
 export async function fetchCandidates(
   venues: Venue[],
   from: Date,
   until: Date,
-): Promise<{ papers: Paper[]; errors: string[] }> {
+): Promise<{ papers: Paper[]; errors: string[]; warnings: string[] }> {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const enabled = venues.filter((v) => v.enabled);
-  const results: Paper[][] = [];
+  const journals = enabled.filter((v) => v.kind !== "arxiv");
+  const arxiv = enabled.filter((v) => v.kind === "arxiv");
+
+  const crossrefResults: Paper[][] = [];
   let next = 0;
   const worker = async () => {
-    while (next < enabled.length) {
-      const v = enabled[next++];
+    while (next < journals.length) {
+      const v = journals[next++];
       try {
-        results.push(await crossrefVenue(v, from, until));
+        crossrefResults.push(await crossrefVenue(v, from, until));
       } catch (err) {
-        errors.push(`${v.name}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`${v.name}: ${message(err)}`);
       }
     }
   };
+
+  // Feeds and arXiv are other hosts, so they run alongside the Crossref reads.
+  const feedsDone = Promise.all(
+    journals
+      .filter((v) => v.feed_url.trim())
+      .map((v) =>
+        feedVenue(v, from).catch((err) => {
+          warnings.push(`${v.name} feed: ${message(err)}`);
+          return [] as Paper[];
+        }),
+      ),
+  );
+  // arXiv asks for one request at a time, so its venues are read one after another.
+  const arxivDone = (async () => {
+    const all: Paper[] = [];
+    for (const v of arxiv) {
+      try {
+        all.push(...(await arxivVenue(v, from, until)));
+      } catch (err) {
+        errors.push(`${v.name}: ${message(err)}`);
+      }
+    }
+    return all;
+  })();
+
   await Promise.all(Array.from({ length: VENUE_CONCURRENCY }, worker));
-  const byDoi = new Map<string, Paper>();
-  for (const p of results.flat()) if (!byDoi.has(p.doi)) byDoi.set(p.doi, p);
-  return { papers: [...byDoi.values()], errors };
+  const feedResults = await feedsDone;
+  const arxivResults = await arxivDone;
+
+  const papers = dedupe([...crossrefResults.flat(), ...feedResults.flat(), ...arxivResults]);
+  return { papers, errors, warnings };
 }
 
 /* ------------------------------------------------------------------ */
@@ -274,12 +355,13 @@ async function semanticScholarAbstracts(dois: string[]): Promise<Map<string, str
 
 /** Fills in missing abstracts in place. */
 export async function addAbstracts(papers: Paper[]): Promise<void> {
-  let missing = papers.filter((p) => !p.abstract);
+  // Only real DOIs can be looked up; arXiv and feed items bring their own abstract if any.
+  let missing = papers.filter((p) => !p.abstract && p.doi.startsWith("10."));
   if (missing.length === 0) return;
   const oa = await openAlexAbstracts(missing.map((p) => p.doi));
   for (const p of missing) p.abstract = oa.get(p.doi) ?? null;
 
-  missing = papers.filter((p) => !p.abstract);
+  missing = missing.filter((p) => !p.abstract);
   if (missing.length === 0) return;
   const s2 = await semanticScholarAbstracts(missing.map((p) => p.doi));
   for (const p of missing) p.abstract = s2.get(p.doi) ?? null;
