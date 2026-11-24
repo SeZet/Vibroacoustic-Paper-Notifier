@@ -13,6 +13,14 @@ export interface Paper {
 }
 
 const MAX_PER_VENUE = 3000;
+/**
+ * Title searches (venues without an ISSN) match loosely: "Aeroacoustics
+ * Conference" hits tens of thousands of unrelated conference records a month.
+ * Results come sorted by relevance, so the real matches are on the first pages.
+ */
+const MAX_TITLE_SEARCH_PAGES = 2;
+/** Crossref limits how many requests may run at once, so venues are read a few at a time. */
+const VENUE_CONCURRENCY = 2;
 
 function politeParams(): string {
   const email = process.env.CONTACT_EMAIL;
@@ -24,7 +32,7 @@ function userAgent(): string {
   return `VibroacousticPaperNotifier/1.0${email ? ` (mailto:${email})` : ""}`;
 }
 
-async function fetchJson(url: string, init: RequestInit = {}, attempts = 3): Promise<unknown> {
+async function fetchJson(url: string, init: RequestInit = {}, attempts = 4): Promise<unknown> {
   let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -35,14 +43,22 @@ async function fetchJson(url: string, init: RequestInit = {}, attempts = 3): Pro
         signal: AbortSignal.timeout(30_000),
       });
       if (res.status === 429 || res.status >= 500) {
-        lastError = new Error(`${res.status} from ${new URL(url).host}`);
-        await sleep(1500 * (i + 1));
+        lastError = new Error(
+          res.status === 429
+            ? `rate limited by ${new URL(url).host}`
+            : `${res.status} from ${new URL(url).host}`,
+        );
+        const retryAfter = Number(res.headers.get("retry-after"));
+        await sleep(retryAfter > 0 ? Math.min(retryAfter, 30) * 1000 : 2000 * 2 ** i);
         continue;
       }
       if (!res.ok) throw new Error(`${res.status} from ${new URL(url).host}`);
       return await res.json();
     } catch (err) {
-      lastError = err;
+      lastError =
+        err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
+          ? new Error(`no answer from ${new URL(url).host} within 30 s`)
+          : err;
       await sleep(1000 * (i + 1));
     }
   }
@@ -155,7 +171,9 @@ async function crossrefVenue(venue: Venue, from: Date, until: Date): Promise<Pap
 
   const papers: Paper[] = [];
   let cursor = "*";
+  let pages = 0;
   while (papers.length < MAX_PER_VENUE) {
+    if (!issns && pages++ >= MAX_TITLE_SEARCH_PAGES) break;
     const url = `${base}&rows=500&select=${SELECT}&cursor=${encodeURIComponent(cursor)}${politeParams()}`;
     const data = (await fetchJson(url)) as { message: { items: CrossrefItem[]; "next-cursor"?: string } };
     const items = data.message.items ?? [];
@@ -177,16 +195,20 @@ export async function fetchCandidates(
   until: Date,
 ): Promise<{ papers: Paper[]; errors: string[] }> {
   const errors: string[] = [];
-  const results = await Promise.all(
-    venues
-      .filter((v) => v.enabled)
-      .map((v) =>
-        crossrefVenue(v, from, until).catch((err) => {
-          errors.push(`${v.name}: ${err instanceof Error ? err.message : String(err)}`);
-          return [] as Paper[];
-        }),
-      ),
-  );
+  const enabled = venues.filter((v) => v.enabled);
+  const results: Paper[][] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < enabled.length) {
+      const v = enabled[next++];
+      try {
+        results.push(await crossrefVenue(v, from, until));
+      } catch (err) {
+        errors.push(`${v.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: VENUE_CONCURRENCY }, worker));
   const byDoi = new Map<string, Paper>();
   for (const p of results.flat()) if (!byDoi.has(p.doi)) byDoi.set(p.doi, p);
   return { papers: [...byDoi.values()], errors };
