@@ -102,7 +102,10 @@ async function scanOne(
   const fresh = await unseenPapers(person, candidates);
 
   const { matches, judged } = await rankPapers(person.interests, fresh, { deadline });
-  const complete = judged.length === fresh.length;
+  const allJudged = judged.length === fresh.length;
+  // When a venue could not be read, its papers from this window are still missing,
+  // so the window stays open and the next run reads it again (already judged papers are skipped).
+  const complete = allJudged && sourceErrors.length === 0;
 
   // A new scan replaces the Recommended list: anything not saved moves to Deleted.
   // A scan that continues an unfinished one keeps what that one already found.
@@ -112,10 +115,10 @@ async function scanOne(
   await sql`UPDATE people SET scan_pending = ${!complete} WHERE id = ${person.id}`;
 
   const range = `${fromDay} to ${now.toISOString().slice(0, 10)}`;
-  let status = complete
+  let status = allJudged
     ? `${matches.length} new recommendation${matches.length === 1 ? "" : "s"} from ${fresh.length} new papers published ${range}.`
     : `Checked ${judged.length} of ${fresh.length} new papers published ${range} and found ${matches.length}. The rest are checked on the next run (or click Scan now again).`;
-  if (sourceErrors.length) status += ` Some venues could not be read: ${sourceErrors.join("; ")}`;
+  if (sourceErrors.length) status += ` Some venues could not be read: ${sourceErrors.join("; ")}. They are read again on the next run.`;
   return { status, complete };
 }
 

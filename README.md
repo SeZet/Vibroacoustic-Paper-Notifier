@@ -97,7 +97,7 @@ From then on, scans run automatically. You can see the scheduled job under **Set
 
 - **"The site is not fully set up yet"**: the database isn't connected or the deploy happened before it was. Do steps 3 and 5.
 - **A scan says "ANTHROPIC_API_KEY is not set" or "Claude API calls failed"**: check the key in step 4, that you have credit in the Anthropic Console, and redeploy.
-- **"Some venues could not be read"**: Crossref was temporarily unreachable for that venue. The next scan covers the gap, since each scan starts where the last successful one ended.
+- **"Some venues could not be read"**: Crossref did not answer for that venue (it was busy, rate limited the site, or took longer than 30 seconds). Setting `CONTACT_EMAIL` gets you Crossref's faster pool and makes this rarer. The next scan covers the gap, since each scan starts where the last successful one ended.
 - **Scan now seems stuck**: a scan can take a few minutes. If the page times out, reload it; the result appears once the scan finishes.
 - **"Checked X of Y new papers…"**: there were too many new papers to judge within Vercel's 5-minute limit (this can happen when a big conference proceedings appears at once). The rest are checked on the next scheduled run, or click Scan now again.
 
