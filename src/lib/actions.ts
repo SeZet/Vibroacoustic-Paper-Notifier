@@ -5,7 +5,16 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { ensureSchema, sql, type Person, type RecStatus } from "./db";
 import { runScans } from "./scan";
-import { authToken, checkPassword, COST_COOKIE, isAuthorized, resetCostTotal, setPassword } from "./costs";
+import { resetCostTotal } from "./costs";
+import {
+  authToken,
+  checkPassword,
+  isAuthorized,
+  MIN_PASSWORD_LENGTH,
+  PASSWORDS,
+  setPassword,
+  type PasswordKind,
+} from "./passwords";
 
 export async function savePerson(formData: FormData) {
   await ensureSchema();
@@ -68,52 +77,90 @@ export async function deleteVenue(formData: FormData) {
 }
 
 
-// --- API cost page ---
+// --- Passwords ---
 
-async function requireCostAuth() {
+async function signIn(kind: PasswordKind) {
   const jar = await cookies();
-  if (!(await isAuthorized(jar.get(COST_COOKIE)?.value))) redirect("/costs");
-}
-
-async function signIn() {
-  const jar = await cookies();
-  jar.set(COST_COOKIE, await authToken(), {
+  jar.set(PASSWORDS[kind].cookie, await authToken(kind), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    path: "/costs",
-    maxAge: 30 * 24 * 60 * 60,
+    path: PASSWORDS[kind].cookiePath,
+    maxAge: 90 * 24 * 60 * 60,
   });
 }
 
+async function signOut(kind: PasswordKind) {
+  const jar = await cookies();
+  jar.delete({ name: PASSWORDS[kind].cookie, path: PASSWORDS[kind].cookiePath });
+}
+
+async function requireAuth(kind: PasswordKind, home: string) {
+  const jar = await cookies();
+  if (!(await isAuthorized(kind, jar.get(PASSWORDS[kind].cookie)?.value))) redirect(home);
+}
+
+/** Checks the form's current password and saves the new one; returns a status code for the page. */
+async function changePassword(kind: PasswordKind, formData: FormData): Promise<string> {
+  const current = String(formData.get("current") ?? "");
+  const next = String(formData.get("next") ?? "");
+  const repeat = String(formData.get("repeat") ?? "");
+  if (!(await checkPassword(kind, current))) return "wrong";
+  if (next.length < MIN_PASSWORD_LENGTH) return "short";
+  if (next !== repeat) return "mismatch";
+  await setPassword(kind, next);
+  await signIn(kind); // the old cookie no longer matches the new password
+  return "changed";
+}
+
+/** Only allow redirects to a path on this site. */
+function safeNext(raw: FormDataEntryValue | null): string {
+  const next = String(raw ?? "");
+  return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+}
+
+// Whole site
+
+export async function siteLogin(formData: FormData) {
+  const next = safeNext(formData.get("next"));
+  if (!(await checkPassword("site", String(formData.get("password") ?? "")))) {
+    redirect(`/login?error=wrong&next=${encodeURIComponent(next)}`);
+  }
+  await signIn("site");
+  redirect(next);
+}
+
+export async function siteLogout() {
+  await signOut("site");
+  await signOut("cost");
+  redirect("/login");
+}
+
+export async function changeSitePassword(formData: FormData) {
+  await requireAuth("site", "/login");
+  redirect(`/access?pw=${await changePassword("site", formData)}`);
+}
+
+// API cost page
+
 export async function costLogin(formData: FormData) {
-  const password = String(formData.get("password") ?? "");
-  if (!(await checkPassword(password))) redirect("/costs?error=wrong");
-  await signIn();
+  if (!(await checkPassword("cost", String(formData.get("password") ?? "")))) redirect("/costs?error=wrong");
+  await signIn("cost");
   redirect("/costs");
 }
 
 export async function costLogout() {
-  const jar = await cookies();
-  jar.delete({ name: COST_COOKIE, path: "/costs" });
+  await signOut("cost");
   redirect("/costs");
 }
 
 export async function resetCosts() {
-  await requireCostAuth();
+  await requireAuth("cost", "/costs");
   await resetCostTotal();
   revalidatePath("/costs");
 }
 
 export async function changeCostPassword(formData: FormData) {
-  await requireCostAuth();
-  const current = String(formData.get("current") ?? "");
-  const next = String(formData.get("next") ?? "");
-  const repeat = String(formData.get("repeat") ?? "");
-  if (!(await checkPassword(current))) redirect("/costs?pw=wrong");
-  if (next.length < 4) redirect("/costs?pw=short");
-  if (next !== repeat) redirect("/costs?pw=mismatch");
-  await setPassword(next);
-  await signIn(); // the old cookie no longer matches the new password
-  redirect("/costs?pw=changed");
+  await requireAuth("cost", "/costs");
+  redirect(`/costs?pw=${await changePassword("cost", formData)}`);
 }

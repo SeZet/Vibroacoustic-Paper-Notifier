@@ -1,4 +1,3 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { ensureSchema, sql } from "./db";
 
 /** USD per million tokens (Anthropic API list prices). */
@@ -104,60 +103,4 @@ export async function resetCostTotal() {
   const now = new Date().toISOString();
   await sql`INSERT INTO meta (key, value) VALUES ('cost_reset_at', ${now})
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
-}
-
-// --- Password for the cost page ---
-
-export const DEFAULT_COST_PASSWORD = "admin";
-export const COST_COOKIE = "cost_auth";
-
-function hashPassword(password: string): string {
-  const salt = randomBytes(16).toString("hex");
-  return `${salt}:${scryptSync(password, salt, 32).toString("hex")}`;
-}
-
-/** The stored hash, or null while the default password is still in use. */
-async function storedHash(): Promise<string | null> {
-  const rows = await sql`SELECT value FROM meta WHERE key = 'cost_password'`;
-  return rows[0] ? String(rows[0].value) : null;
-}
-
-export async function checkPassword(password: string): Promise<boolean> {
-  await ensureSchema();
-  const stored = await storedHash();
-  if (!stored) return password === DEFAULT_COST_PASSWORD;
-  const [salt, hash] = stored.split(":");
-  const given = scryptSync(password, salt, 32);
-  const expected = Buffer.from(hash, "hex");
-  return given.length === expected.length && timingSafeEqual(given, expected);
-}
-
-export async function setPassword(password: string) {
-  await ensureSchema();
-  const value = hashPassword(password);
-  await sql`INSERT INTO meta (key, value) VALUES ('cost_password', ${value})
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
-}
-
-export async function usingDefaultPassword(): Promise<boolean> {
-  await ensureSchema();
-  return (await storedHash()) === null;
-}
-
-/**
- * Value of the login cookie. It is derived from the current password hash, so
- * changing the password signs everyone else out.
- */
-export async function authToken(): Promise<string> {
-  const stored = (await storedHash()) ?? `default:${DEFAULT_COST_PASSWORD}`;
-  const secret = process.env.CRON_SECRET ?? "";
-  return createHash("sha256").update(`cost-page|${secret}|${stored}`).digest("hex");
-}
-
-export async function isAuthorized(cookieValue: string | undefined): Promise<boolean> {
-  if (!cookieValue) return false;
-  await ensureSchema();
-  const expected = Buffer.from(await authToken());
-  const given = Buffer.from(cookieValue);
-  return given.length === expected.length && timingSafeEqual(given, expected);
 }

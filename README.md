@@ -15,7 +15,7 @@ A small website for our vibroacoustics group. Each member has a section where th
 - The **Venues** page lists the journals and conferences that are checked. Anyone can add, pause or delete venues.
 - The **API cost** page shows how much the Claude API calls of all scans have cost so far. It is password protected (default password `admin`; change it on the page after signing in). **Reset to zero** starts the count again, e.g. after buying more credit. The amount is worked out from the token counts of each call at Anthropic's list prices, so it is an estimate; the Anthropic Console shows the exact bill. Only scans made after this page was added are counted.
 
-There is no login: anyone with the link can view and edit. Share the link only with the group.
+The whole site is protected by one group password (default `VA-DLR`). Everyone signs in once per browser and stays signed in for 90 days. Anyone signed in can change the group password on the **Tool access** page; after a change, everyone else has to sign in again with the new password. The **API cost** page has its own, separate password.
 
 ## How it works
 
