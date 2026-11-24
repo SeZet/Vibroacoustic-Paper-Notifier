@@ -52,13 +52,33 @@ export async function scanNow(formData: FormData) {
   revalidatePath(`/${slug}`);
 }
 
+function venueFields(formData: FormData) {
+  const kind = formData.get("kind") === "arxiv" ? "arxiv" : "journal";
+  const name = String(formData.get("name") ?? "").trim();
+  const issns = kind === "arxiv" ? "" : String(formData.get("issns") ?? "").trim();
+  const matchText = String(formData.get("match_text") ?? "").trim();
+  let feedUrl = kind === "arxiv" ? "" : String(formData.get("feed_url") ?? "").trim();
+  if (feedUrl && !/^https?:\/\//i.test(feedUrl)) feedUrl = "";
+  const valid = Boolean(name && (issns || matchText));
+  return { kind, name, issns, matchText, feedUrl, valid };
+}
+
 export async function addVenue(formData: FormData) {
   await ensureSchema();
-  const name = String(formData.get("name") ?? "").trim();
-  const issns = String(formData.get("issns") ?? "").trim();
-  const matchText = String(formData.get("match_text") ?? "").trim();
-  if (!name || (!issns && !matchText)) return;
-  await sql`INSERT INTO venues (name, issns, match_text) VALUES (${name}, ${issns}, ${matchText})`;
+  const v = venueFields(formData);
+  if (!v.valid) return;
+  await sql`INSERT INTO venues (name, kind, issns, match_text, feed_url)
+    VALUES (${v.name}, ${v.kind}, ${v.issns}, ${v.matchText}, ${v.feedUrl})`;
+  revalidatePath("/venues");
+}
+
+export async function updateVenue(formData: FormData) {
+  await ensureSchema();
+  const id = Number(formData.get("id"));
+  const v = venueFields(formData);
+  if (!id || !v.valid) return;
+  await sql`UPDATE venues SET name = ${v.name}, kind = ${v.kind}, issns = ${v.issns},
+    match_text = ${v.matchText}, feed_url = ${v.feedUrl} WHERE id = ${id}`;
   revalidatePath("/venues");
 }
 

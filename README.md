@@ -12,7 +12,7 @@ A small website for our vibroacoustics group. Each member has a section where th
   - **Each new scan moves whatever is still on your Recommended list (and not saved) to Deleted**, so Recommended always shows the latest scan's results. Nothing is lost: it's all in Deleted.
   - A paper is never recommended to you twice, even if you deleted it.
 - **Scan now** runs a check immediately instead of waiting for the schedule. It covers the time since your last scan.
-- The **Venues** page lists the journals and conferences that are checked. Anyone can add, pause or delete venues.
+- The **Venues** page lists the journals and conferences that are checked. Anyone can add, edit, pause or delete venues, give a journal an RSS feed, or change the arXiv search.
 - The **API cost** page shows how much the Claude API calls of all scans have cost so far. It is password protected (default password `admin`; change it on the page after signing in). **Reset to zero** starts the count again, e.g. after buying more credit. The amount is worked out from the token counts of each call at Anthropic's list prices, so it is an estimate; the Anthropic Console shows the exact bill. Only scans made after this page was added are counted.
 
 The whole site is protected by one group password (default `VA-DLR`). Everyone signs in once per browser and stays signed in for 90 days. Anyone signed in can change the group password on the **Tool access** page; after a change, everyone else has to sign in again with the new password. The **API cost** page has its own, separate password.
@@ -20,11 +20,15 @@ The whole site is protected by one group password (default `VA-DLR`). Everyone s
 ## How it works
 
 1. **Once a day** Vercel runs the scheduled job (`/api/cron`, 05:00 UTC). It only scans for people whose weekly or monthly scan is due.
-2. **New publications** registered since that person's last scan are fetched from [Crossref](https://www.crossref.org/) for every enabled venue (journals by ISSN, conferences by proceedings title).
+2. **New publications** registered since that person's last scan are fetched from [Crossref](https://www.crossref.org/) for every enabled venue (journals by ISSN, conferences by proceedings title). Two more sources are read alongside:
+   - **Journal RSS feeds** (table of contents) for journals that have one set on the Venues page. They catch papers whose DOI is not registered yet. The starter feeds are JSV, Applied Acoustics and MSSP (ScienceDirect); add others, such as JASA, by pasting the journal's feed link on the Venues page.
+   - **[arXiv](https://arxiv.org/)** preprints matching an arXiv search (starter query: vibroacoustic, aeroacoustic, structure-borne, sound transmission, cabin noise and similar terms in the abstract).
+
+   A paper found by several sources (same DOI or same title) is listed once. Google Scholar is not used: it has no API and blocks automated searches.
 3. **Abstracts** come from Crossref when the publisher provides them, otherwise from [OpenAlex](https://openalex.org/) and then [Semantic Scholar](https://www.semanticscholar.org/). Some publishers (Elsevier in particular) don't share abstracts with these services, so some papers will show "No abstract available"; the **Open paper** link still works.
 4. **Claude** reads each person's interests and the list of new papers (title, venue, abstract) and scores each paper from 1 to 10. Papers scoring 6 or more are added to that person's list.
 
-Starter venues: Journal of Sound and Vibration, Applied Acoustics, JASA, Mechanical Systems and Signal Processing, Inter-Noise proceedings, and the AIAA/CEAS Aeroacoustics Conference.
+Starter venues: Journal of Sound and Vibration, Applied Acoustics, JASA, Mechanical Systems and Signal Processing, Inter-Noise proceedings, the AIAA/CEAS Aeroacoustics Conference, and an arXiv search. Sites set up before feeds and arXiv were added get the starter feeds and the arXiv venue automatically on the next start.
 
 ## Deploying on Vercel
 
@@ -84,7 +88,7 @@ From then on, scans run automatically. You can see the scheduled job under **Set
 ## Costs
 
 - **Vercel** Hobby plan and **Neon** free plan: free for this use.
-- **Crossref, OpenAlex, Semantic Scholar**: free.
+- **Crossref, OpenAlex, Semantic Scholar, arXiv, journal RSS feeds**: free.
 - **Claude API**: depends on how many papers are published and the model. With the default model, expect very roughly 0.10 to 0.50 USD per person per scan for the starter venues (a monthly scan covers about four times as many papers as a weekly one, so the monthly total is similar). Switching `CLAUDE_MODEL` to `claude-sonnet-5-5` halves that; `claude-haiku-5-5` costs a small fraction. A large conference (e.g. when the Inter-Noise proceedings are published all at once) makes that one scan more expensive. You can see actual usage in the Anthropic Console.
 
 ## Changing things later
@@ -98,6 +102,7 @@ From then on, scans run automatically. You can see the scheduled job under **Set
 - **"The site is not fully set up yet"**: the database isn't connected or the deploy happened before it was. Do steps 3 and 5.
 - **A scan says "ANTHROPIC_API_KEY is not set" or "Claude API calls failed"**: check the key in step 4, that you have credit in the Anthropic Console, and redeploy.
 - **"Some venues could not be read"**: Crossref did not answer for that venue (it was busy, rate limited the site, or took longer than 30 seconds). Setting `CONTACT_EMAIL` gets you Crossref's faster pool and makes this rarer. The next scan covers the gap, since each scan starts where the last successful one ended.
+- **"Some journal feeds could not be read"**: the publisher's RSS feed did not answer or refused the request. Those journals are still checked through Crossref, so nothing is missed; papers just show up once their DOI is registered. If one feed keeps failing, remove its link on the Venues page.
 - **Scan now seems stuck**: a scan can take a few minutes. If the page times out, reload it; the result appears once the scan finishes.
 - **"Checked X of Y new papers…"**: there were too many new papers to judge within Vercel's 5-minute limit (this can happen when a big conference proceedings appears at once). The rest are checked on the next scheduled run, or click Scan now again.
 
