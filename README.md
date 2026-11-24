@@ -13,6 +13,7 @@ A small website for our vibroacoustics group. Each member has a section where th
   - A paper is never recommended to you twice, even if you deleted it.
 - **Scan now** runs a check immediately instead of waiting for the schedule. It covers the time since your last scan.
 - The **Venues** page lists the journals and conferences that are checked. Anyone can add, pause or delete venues.
+- The **API cost** page shows how much the Claude API calls of all scans have cost so far. It is password protected (default password `admin`; change it on the page after signing in). **Reset to zero** starts the count again, e.g. after buying more credit. The amount is worked out from the token counts of each call at Anthropic's list prices, so it is an estimate; the Anthropic Console shows the exact bill. Only scans made after this page was added are counted.
 
 There is no login: anyone with the link can view and edit. Share the link only with the group.
 

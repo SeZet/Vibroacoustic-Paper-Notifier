@@ -120,6 +120,17 @@ async function createSchema() {
   )`;
   await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS scan_pending BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
+  // Tokens and cost of every Claude API call, for the API cost page.
+  await sql`CREATE TABLE IF NOT EXISTS api_usage (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0
+  )`;
 
   for (const name of DEFAULT_PEOPLE) {
     await sql`INSERT INTO people (name, slug) VALUES (${name}, ${slugify(name)})

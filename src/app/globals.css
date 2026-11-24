@@ -130,3 +130,6 @@ button:disabled { opacity: 0.6; cursor: progress; }
   .venues .actions { justify-content: flex-start; }
 }
 .stack label.row, .row label.row { flex-direction: row; align-items: center; }
+
+.big-number { font-size: 2.2rem; font-weight: 700; margin: 4px 0 8px; }
+.narrow { max-width: 360px; }
