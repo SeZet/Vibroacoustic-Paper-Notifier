@@ -28,6 +28,9 @@ async function Nav() {
       <Link href="/venues" className="nav-venues">
         Venues
       </Link>
+      <Link href="/costs" className="nav-venues">
+        API cost
+      </Link>
     </nav>
   );
 }

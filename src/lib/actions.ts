@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { ensureSchema, sql, type Person, type RecStatus } from "./db";
 import { runScans } from "./scan";
+import { authToken, checkPassword, COST_COOKIE, isAuthorized, resetCostTotal, setPassword } from "./costs";
 
 export async function savePerson(formData: FormData) {
   await ensureSchema();
@@ -64,3 +67,53 @@ export async function deleteVenue(formData: FormData) {
   revalidatePath("/venues");
 }
 
+
+// --- API cost page ---
+
+async function requireCostAuth() {
+  const jar = await cookies();
+  if (!(await isAuthorized(jar.get(COST_COOKIE)?.value))) redirect("/costs");
+}
+
+async function signIn() {
+  const jar = await cookies();
+  jar.set(COST_COOKIE, await authToken(), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/costs",
+    maxAge: 30 * 24 * 60 * 60,
+  });
+}
+
+export async function costLogin(formData: FormData) {
+  const password = String(formData.get("password") ?? "");
+  if (!(await checkPassword(password))) redirect("/costs?error=wrong");
+  await signIn();
+  redirect("/costs");
+}
+
+export async function costLogout() {
+  const jar = await cookies();
+  jar.delete({ name: COST_COOKIE, path: "/costs" });
+  redirect("/costs");
+}
+
+export async function resetCosts() {
+  await requireCostAuth();
+  await resetCostTotal();
+  revalidatePath("/costs");
+}
+
+export async function changeCostPassword(formData: FormData) {
+  await requireCostAuth();
+  const current = String(formData.get("current") ?? "");
+  const next = String(formData.get("next") ?? "");
+  const repeat = String(formData.get("repeat") ?? "");
+  if (!(await checkPassword(current))) redirect("/costs?pw=wrong");
+  if (next.length < 4) redirect("/costs?pw=short");
+  if (next !== repeat) redirect("/costs?pw=mismatch");
+  await setPassword(next);
+  await signIn(); // the old cookie no longer matches the new password
+  redirect("/costs?pw=changed");
+}

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Paper } from "./sources";
+import { logUsage } from "./costs";
 
 export interface Match {
   paper: Paper;
@@ -79,6 +80,8 @@ async function rankBatch(client: Anthropic, interests: string, batch: Paper[]): 
       },
     ],
   });
+  // response.model is the model that actually served the call (it can be the fallback).
+  await logUsage(response.model || modelName(), response.usage);
 
   if (response.stop_reason === "refusal") return [];
   const text = response.content
