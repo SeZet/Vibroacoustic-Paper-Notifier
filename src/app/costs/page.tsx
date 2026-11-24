@@ -1,16 +1,11 @@
 import { cookies } from "next/headers";
 import { changeCostPassword, costLogin, costLogout, resetCosts } from "@/lib/actions";
-import { COST_COOKIE, getCostSummary, isAuthorized, usingDefaultPassword } from "@/lib/costs";
+import { getCostSummary } from "@/lib/costs";
+import { isAuthorized, PASSWORDS, usingDefaultPassword } from "@/lib/passwords";
+import { PasswordForm } from "@/components/PasswordForm";
 import { SubmitButton } from "@/components/SubmitButton";
 import { LocalTime } from "@/components/LocalTime";
 import { SetupNotice } from "@/components/SetupNotice";
-
-const PW_MESSAGES: Record<string, string> = {
-  wrong: "The current password is not correct.",
-  short: "The new password needs at least 4 characters.",
-  mismatch: "The two new passwords do not match.",
-  changed: "Password changed.",
-};
 
 function usd(n: number): string {
   return n < 0.01 && n > 0 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
@@ -29,9 +24,9 @@ export default async function CostsPage({
   const jar = await cookies();
   let authorized, summary, isDefault;
   try {
-    authorized = await isAuthorized(jar.get(COST_COOKIE)?.value);
+    authorized = await isAuthorized("cost", jar.get(PASSWORDS.cost.cookie)?.value);
     if (authorized) {
-      [summary, isDefault] = await Promise.all([getCostSummary(), usingDefaultPassword()]);
+      [summary, isDefault] = await Promise.all([getCostSummary(), usingDefaultPassword("cost")]);
     }
   } catch (err) {
     return <SetupNotice error={err} />;
@@ -122,24 +117,7 @@ export default async function CostsPage({
         {isDefault && (
           <p className="danger small">This page still uses the default password. Please choose your own.</p>
         )}
-        {pw && PW_MESSAGES[pw] && <p className={pw === "changed" ? "small" : "danger small"}>{PW_MESSAGES[pw]}</p>}
-        <form action={changeCostPassword} className="stack narrow">
-          <label>
-            Current password
-            <input name="current" type="password" required autoComplete="current-password" />
-          </label>
-          <label>
-            New password
-            <input name="next" type="password" required minLength={4} autoComplete="new-password" />
-          </label>
-          <label>
-            New password again
-            <input name="repeat" type="password" required minLength={4} autoComplete="new-password" />
-          </label>
-          <div>
-            <SubmitButton pendingText="Saving…">Change password</SubmitButton>
-          </div>
-        </form>
+        <PasswordForm action={changeCostPassword} status={pw} />
       </section>
     </>
   );

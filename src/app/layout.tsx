@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { getPeople } from "@/lib/db";
+import { isAuthorized, PASSWORDS } from "@/lib/passwords";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,6 +15,9 @@ export const dynamic = "force-dynamic";
 async function Nav() {
   let people: { name: string; slug: string; open_count: number }[] = [];
   try {
+    // Signed-out visitors (on the sign-in page) see no member names.
+    const jar = await cookies();
+    if (!(await isAuthorized("site", jar.get(PASSWORDS.site.cookie)?.value))) return null;
     people = await getPeople();
   } catch {
     // The page itself shows the setup notice.
@@ -30,6 +35,9 @@ async function Nav() {
       </Link>
       <Link href="/costs" className="nav-venues">
         API cost
+      </Link>
+      <Link href="/access" className="nav-venues">
+        Tool access
       </Link>
     </nav>
   );
